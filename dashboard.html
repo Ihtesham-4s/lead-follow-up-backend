@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lead Follow-Up Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 1000px; margin: 30px auto; padding: 0 16px; background: #f5f6f8; color: #222; }
+    h1 { margin-bottom: 4px; }
+    .sub { color: #666; margin-top: 0; }
+    .summary { display: flex; gap: 12px; margin: 16px 0; }
+    .card { background: white; padding: 12px 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+    .card b { display: block; font-size: 26px; }
+    .card.red b { color: #c62828; }
+    form { background: white; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    form input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; flex: 1; min-width: 140px; }
+    button { cursor: pointer; padding: 6px 10px; border: 1px solid #bbb; border-radius: 4px; background: white; margin: 2px 2px 2px 0; }
+    button:hover { background: #eee; }
+    button.primary { background: #1565c0; color: white; border-color: #1565c0; }
+    table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+    th, td { padding: 10px; text-align: left; border-bottom: 1px solid #eee; vertical-align: top; }
+    th { background: #222; color: white; }
+    tr.overdue { background: #ffe5e5; }
+    .badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; background: #e3f2fd; }
+    .badge.overdue { background: #c62828; color: white; }
+    .empty { text-align: center; color: #666; padding: 24px; }
+  </style>
+</head>
+<body>
+  <h1>Lead Follow-Up Dashboard</h1>
+  <p class="sub">Open leads that still need a reply. Longest waiting first. Refreshes every 30 seconds.</p>
+
+  <div class="summary">
+    <div class="card"><b id="count-open">0</b>Open leads</div>
+    <div class="card red"><b id="count-overdue">0</b>Overdue</div>
+  </div>
+
+  <!-- Form to add a new lead -->
+  <form id="lead-form">
+    <input id="f-name" placeholder="Name" required>
+    <input id="f-contact" placeholder="Contact" required>
+    <input id="f-message" placeholder="Message" required style="flex: 3;">
+    <button class="primary" type="submit">Add lead</button>
+  </form>
+
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Name</th><th>Contact</th><th>Message</th><th>Waiting</th><th>Status</th><th>Actions</th></tr>
+    </thead>
+    <tbody id="queue"></tbody>
+  </table>
+
+  <script>
+    // Turns text into safe HTML, so a customer message can't inject code into our page.
+    function esc(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Turns 135 minutes into "2h 15m".
+    function formatWait(minutes) {
+      if (minutes < 60) return minutes + "m";
+      return Math.floor(minutes / 60) + "h " + (minutes % 60) + "m";
+    }
+
+    // Asks our backend for the queue and draws the table.
+    async function loadQueue() {
+      const res = await fetch("/follow-up-queue");
+      const leads = await res.json();
+
+      document.getElementById("count-open").textContent = leads.length;
+      document.getElementById("count-overdue").textContent = leads.filter(l => l.overdue).length;
+
+      const body = document.getElementById("queue");
+      if (leads.length === 0) {
+        body.innerHTML = '<tr><td colspan="7" class="empty">No leads waiting. Nice work!</td></tr>';
+        return;
+      }
+
+      body.innerHTML = leads.map(l => `
+        <tr class="${l.overdue ? "overdue" : ""}">
+          <td>${l.id}</td>
+          <td>${esc(l.name)}</td>
+          <td>${esc(l.contact)}</td>
+          <td>${esc(l.message)}</td>
+          <td>${formatWait(l.minutes_waiting)}</td>
+          <td><span class="badge ${l.overdue ? "overdue" : ""}">${l.overdue ? "OVERDUE" : l.status}</span></td>
+          <td>
+            <button onclick="setStatus(${l.id}, 'contacted')">Contacted</button>
+            <button onclick="setStatus(${l.id}, 'booked')">Booked</button>
+            <button onclick="setStatus(${l.id}, 'lost')">Lost</button>
+          </td>
+        </tr>`).join("");
+    }
+
+    // Sends PATCH /leads/{id}/status, then redraws the table.
+    async function setStatus(id, status) {
+      await fetch(`/leads/${id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      loadQueue();
+    }
+
+    // When the form is submitted, send POST /leads.
+    document.getElementById("lead-form").addEventListener("submit", async (e) => {
+      e.preventDefault();  // stop the browser from reloading the page
+      await fetch("/leads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: document.getElementById("f-name").value,
+          contact: document.getElementById("f-contact").value,
+          message: document.getElementById("f-message").value
+        })
+      });
+      e.target.reset();
+      loadQueue();
+    });
+
+    loadQueue();                      // draw once when the page opens
+    setInterval(loadQueue, 30000);    // then refresh every 30 seconds
+  </script>
+</body>
+</html>
